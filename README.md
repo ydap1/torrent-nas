@@ -51,6 +51,40 @@ TMDB_API_KEY=your_api_key_here
 
 ### 3. Deploy the stack with Dockge
 
+`compose.yaml`:
+
+```yaml
+services:
+  qbittorrent:
+    image: lscr.io/linuxserver/qbittorrent:latest
+    container_name: qbittorrent
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=Europe/London
+      - WEBUI_PORT=8080
+      - TORRENTING_PORT=6881
+      - DOCKER_MODS=linuxserver/mods:universal-package-install
+      - INSTALL_PACKAGES=rsync
+      - TMDB_API_KEY=${TMDB_API_KEY}
+    volumes:
+      - /opt/stacks/qbittorrent/config:/config
+      - /home/user/downloads:/downloads
+      - /opt/scripts:/opt/scripts
+      - /mnt/nas:/mnt/nas
+    ports:
+      - 8080:8080
+      - 6881:6881
+      - 6881:6881/udp
+    stop_grace_period: 10s
+    restart: unless-stopped
+networks:
+  default:
+    driver: bridge
+    driver_opts:
+      com.docker.network.driver.mtu: "1450"
+```
+
 1. In Dockge, create a new stack (e.g. `main`)
 2. Paste the contents of `compose.yaml` into the compose editor
 3. Make sure the `.env` file is in the same directory as `compose.yaml` on the server

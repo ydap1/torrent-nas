@@ -31,7 +31,58 @@ qBittorrent has a built-in "Run program after torrent finishes" option. It calls
 
 ## Setup
 
-### 1. TMDB API key
+### 1. Mount your NAS
+
+The script transfers files to `/mnt/nas` on the host. This must be a real filesystem mount — Docker bind-mounts the host path into the container, so the NAS needs to be mounted on the host before the container starts.
+
+**SMB / CIFS (most home NAS devices — Synology, QNAP, TrueNAS, etc.)**
+
+Install the client and create the mount point:
+
+```bash
+sudo apt install cifs-utils
+sudo mkdir -p /mnt/nas
+```
+
+Mount it manually to test:
+
+```bash
+sudo mount -t cifs //192.168.1.x/share /mnt/nas -o username=youruser,password=yourpass,uid=1000,gid=1000,vers=3.0
+```
+
+To make it survive reboots, add it to `/etc/fstab`:
+
+```
+//192.168.1.x/share  /mnt/nas  cifs  username=youruser,password=yourpass,uid=1000,gid=1000,vers=3.0,_netdev  0  0
+```
+
+The `_netdev` flag tells the system to wait for the network before mounting, which is important on boot.
+
+**NFS (alternative)**
+
+```bash
+sudo apt install nfs-common
+sudo mkdir -p /mnt/nas
+sudo mount -t nfs 192.168.1.x:/path/to/share /mnt/nas
+```
+
+`/etc/fstab` entry:
+
+```
+192.168.1.x:/path/to/share  /mnt/nas  nfs  defaults,_netdev  0  0
+```
+
+**Verify the mount is working:**
+
+```bash
+mountpoint -q /mnt/nas && echo "mounted" || echo "not mounted"
+```
+
+The `torrent-done.sh` script checks this at runtime and aborts if the NAS is not mounted, so nothing is lost if the NAS goes offline.
+
+---
+
+### 3. TMDB API key
 
 Create a free account at [themoviedb.org](https://www.themoviedb.org/) and generate an API key under **Settings → API → API Key (v3 auth)**.
 
@@ -39,7 +90,7 @@ Create a free account at [themoviedb.org](https://www.themoviedb.org/) and gener
 >
 > This product uses the TMDB API but is not endorsed or certified by TMDB.
 
-### 2. Environment file
+### 4. Environment file
 
 On the server, create `.env` next to your `compose.yaml`:
 
@@ -49,7 +100,7 @@ TMDB_API_KEY=your_api_key_here
 
 `compose.yaml` reads `${TMDB_API_KEY}` from this file automatically when you run `docker compose up`.
 
-### 3. Deploy the stack with Dockge
+### 5. Deploy the stack with Dockge
 
 `compose.yaml`:
 
@@ -105,14 +156,14 @@ The stack expects these paths to exist on the host — adjust them in `compose.y
 id
 ```
 
-### 4. Copy scripts to the server
+### 6. Copy scripts to the server
 
 ```bash
 scp scripts/torrent-done.sh scripts/torrent-name-preview.sh user@server:/opt/scripts/
 ssh user@server 'chmod +x /opt/scripts/torrent-done.sh /opt/scripts/torrent-name-preview.sh'
 ```
 
-### 5. Configure qBittorrent to run the script
+### 7. Configure qBittorrent to run the script
 
 1. Open the qBittorrent web UI (default: `http://server-ip:8080`)
 2. Go to **Tools → Options → Downloads**
@@ -126,7 +177,7 @@ ssh user@server 'chmod +x /opt/scripts/torrent-done.sh /opt/scripts/torrent-name
 
 > **Note:** The script path `/opt/scripts` is mounted into the container via the `volumes` section in `compose.yaml`, so the container can find and execute it.
 
-### 6. Test before using
+### 8. Test before using
 
 Use the preview script to verify the output for any filename without touching real files:
 

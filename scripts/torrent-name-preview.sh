@@ -14,10 +14,14 @@ parse_name() {
     local cleaned title year
 
     cleaned="${raw%.*}"
+    # Replace [Group] tags with a space so adjacent words don't merge
+    cleaned=$(echo "$cleaned" | sed 's/\[[^]]*\]/ /g')
+    # Pad (YYYY) with spaces before stripping parens so year stays separable
+    cleaned=$(echo "$cleaned" | sed -E 's/\(((19|20)[0-9]{2})\)/ \1 /g')
     cleaned="${cleaned//./ }"
     cleaned="${cleaned//_/ }"
     cleaned=$(echo "$cleaned" | tr -d '()[]{}')
-    cleaned=$(echo "$cleaned" | tr -s ' ')
+    cleaned=$(echo "$cleaned" | tr -s ' ' | sed 's/^ //;s/ $//')
 
     year=$(echo "$cleaned" | grep -oE '(19|20)[0-9]{2}' | head -1)
 
@@ -30,9 +34,9 @@ parse_name() {
     title=$(echo "$title" | tr '[:upper:]' '[:lower:]')
 
     for tag in dvdrip bdrip bluray "blu ray" webrip "web dl" web hdtv pdtv \
-               cam scr r5 dvdscr hdrip hevc avc xvid divx remux proper repack \
-               extended theatrical unrated retail limited ntsc pal multi dubbed \
-               subbed by ts; do
+               dvb dvbrip cam scr r5 dvdscr hdrip hevc avc xvid divx remux \
+               proper repack extended theatrical unrated retail limited ntsc \
+               pal multi dubbed subbed by ts; do
         title=$(echo "$title" | sed "s/ $tag / /g; s/ $tag$//; s/^$tag //")
     done
 
@@ -78,7 +82,15 @@ tmdb_lookup() {
     local total
     total=$(echo "$response" | jq -r '.total_results // 0')
     if [ "${total:-0}" -eq 0 ]; then
-        echo "[tmdb] no results." >&2; return 1
+        if [ -n "$year" ]; then
+            echo "[tmdb] no results with year, retrying without..." >&2
+            url="https://api.themoviedb.org/3/search/movie?api_key=${TMDB_API_KEY}&query=${encoded}&language=en-US&include_adult=false"
+            response=$(curl -sf --max-time 10 "$url" 2>/dev/null) || true
+            total=$(echo "$response" | jq -r '.total_results // 0')
+        fi
+        if [ "${total:-0}" -eq 0 ]; then
+            echo "[tmdb] no results found." >&2; return 1
+        fi
     fi
 
     local orig_title eng_title orig_lang release_year chosen_title

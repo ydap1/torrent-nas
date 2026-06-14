@@ -132,8 +132,11 @@ services:
 networks:
   default:
     driver: bridge
+    # If running inside a VM (e.g. Proxmox), the host MTU may be lower than
+    # 1500 due to hypervisor encapsulation. Set this to match ip link show eth0
+    # on the host. Remove driver_opts entirely if running on bare metal.
     driver_opts:
-      com.docker.network.driver.mtu: "1450"
+      com.docker.network.driver.mtu: "1500"
 ```
 
 1. In Dockge, create a new stack (e.g. `main`)

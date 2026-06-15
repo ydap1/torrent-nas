@@ -172,33 +172,18 @@ tmdb_lookup() {
         return 1
     fi
 
-    local movie_id orig_title eng_title orig_lang release_year chosen_title
-    movie_id=$(echo "$response"     | jq -r '.results[0].id // ""')
+    local orig_title eng_title orig_lang release_year chosen_title
     orig_title=$(echo "$response"   | jq -r '.results[0].original_title // ""')
     eng_title=$(echo "$response"    | jq -r '.results[0].title // ""')
     orig_lang=$(echo "$response"    | jq -r '.results[0].original_language // "en"')
     release_year=$(echo "$response" | jq -r '.results[0].release_date // ""' \
                    | grep -oE '[0-9]{4}' | head -1)
 
-    # Fetch Russian translation from the translations endpoint
-    local ru_title=""
-    if [ -n "$movie_id" ]; then
-        local trans
-        trans=$(curl -sf --max-time 10 \
-            "https://api.themoviedb.org/3/movie/${movie_id}/translations?api_key=${TMDB_API_KEY}" \
-            2>/dev/null) || true
-        ru_title=$(echo "$trans" | jq -r \
-            '[.translations[] | select(.iso_639_1 == "ru") | .data.title] | map(select(. != "")) | first // ""' \
-            2>/dev/null)
-    fi
-
-    # Priority: Russian translation > original title (non-English) > English title
-    if [ -n "$ru_title" ]; then
-        chosen_title="$ru_title"
-        log "TMDB: using Russian translation: '$chosen_title' ($release_year)"
-    elif [ "$orig_lang" != "en" ] && [ -n "$orig_title" ]; then
+    # Russian films: use original_title (already in Cyrillic).
+    # Everything else: use the English title.
+    if [ "$orig_lang" = "ru" ] && [ -n "$orig_title" ]; then
         chosen_title="$orig_title"
-        log "TMDB: non-English ($orig_lang), using original_title: '$chosen_title' ($release_year)"
+        log "TMDB: Russian film, using original_title: '$chosen_title' ($release_year)"
     else
         chosen_title="$eng_title"
         log "TMDB: using English title: '$chosen_title' ($release_year)"

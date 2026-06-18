@@ -15,7 +15,7 @@ DOWNLOADS="/downloads"
 NAS_DEST="/mnt/nas/torrents"
 LOG="/config/torrent-transfer.log"
 
-log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [retry] $*" | tee -a "$LOG"; }
+log()  { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [retry] $*" >> "$LOG"; }
 
 # ── Helpers (kept in sync with torrent-done.sh) ───────────────────────────────
 
@@ -194,6 +194,7 @@ for SRC in "$DOWNLOADS"/*; do
     TORRENT_NAME=$(basename "$SRC")
 
     log "----------------------------------------"
+    echo "Checking: $TORRENT_NAME"
     log "Checking: $TORRENT_NAME"
 
     IFS='|' read -r parsed_title parsed_year <<< "$(parse_name "$TORRENT_NAME")"
@@ -214,11 +215,13 @@ for SRC in "$DOWNLOADS"/*; do
 
     # Skip if already on the NAS
     if [ -d "$DEST" ] && [ -n "$(ls -A "$DEST" 2>/dev/null)" ]; then
+        echo "  SKIP: already on NAS as '$folder_name'"
         log "SKIP: '$folder_name' already exists on NAS."
         (( skipped++ )) || true
         continue
     fi
 
+    echo "  → '$folder_name'${DRY_RUN:+ (dry run)}"
     log "Will transfer → '$folder_name'"
 
     if [ "$DRY_RUN" = true ]; then
@@ -239,6 +242,7 @@ for SRC in "$DOWNLOADS"/*; do
     EXIT_CODE=${PIPESTATUS[0]}
 
     if [ "$EXIT_CODE" -eq 0 ]; then
+        echo "  SUCCESS: '$folder_name'"
         log "SUCCESS: '$TORRENT_NAME' → '$folder_name'"
         if [ -d "$SRC" ]; then
             find "$SRC" -mindepth 1 -type d -empty -delete 2>/dev/null || true
@@ -246,10 +250,12 @@ for SRC in "$DOWNLOADS"/*; do
         fi
         (( transferred++ )) || true
     else
+        echo "  FAILED (rsync exit $EXIT_CODE): '$TORRENT_NAME'"
         log "FAILED: rsync exited with code $EXIT_CODE for '$TORRENT_NAME'"
         (( failed++ )) || true
     fi
 done
 
-log "========================================"
+echo ""
+echo "Done: transferred=$transferred skipped=$skipped failed=$failed"
 log "Retry scan complete: transferred=$transferred skipped=$skipped failed=$failed"

@@ -196,7 +196,7 @@ tmdb_lookup() {
 # ── Sanitize name for filesystem / SMB ───────────────────────────────────────
 
 sanitize_name() {
-    echo "$1" | sed 's/[:/\*?"<>|]//g' | tr -s ' ' | sed 's/^ //;s/ $//'
+    echo "$1" | sed 's|/| |g' | sed 's/[:\*?"<>|]//g' | tr -s ' ' | sed 's/^ //;s/ $//'
 }
 
 # ── Build destination folder name ─────────────────────────────────────────────

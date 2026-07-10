@@ -1,7 +1,7 @@
 #!/bin/bash
 
-TORRENT_NAME="$1"
-SRC="/downloads/$TORRENT_NAME"
+SRC="$1"
+TORRENT_NAME=$(basename "$SRC")
 LOG="/config/torrent-transfer.log"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOG"; }

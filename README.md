@@ -212,3 +212,31 @@ tail -f /opt/stacks/qbittorrent/config/torrent-transfer.log
 ## License
 
 Scripts in this repository are released under the [MIT License](LICENSE).
+
+## Scripts
+
+### `resolve_name.py`
+
+Resolves a release name to a library folder name, and is tried first by
+`torrent-done.sh`. It differs from the shell parser in two ways that matter:
+
+* It finds where the **title ends** — at the first year or metadata token —
+  rather than subtracting a fixed list of known tags. Glued (`BDRip1080p`),
+  bracketed (`[anti-raws]Mononoke Hime`), dash-suffixed (`2160p-sofcj`) and
+  abbreviated (`Cc`, `Kp`) debris all disappear, including tags it has never
+  seen.
+* It **scores** every TMDB candidate on title similarity and year agreement
+  instead of taking `results[0]`. Cyrillic is romanised before comparison, so
+  `Brat` matches `Брат` rather than the unrelated `Brats`.
+
+When nothing scores above the threshold it exits non-zero and the caller keeps
+its previous behaviour, so an uncertain name is never renamed to a wrong film.
+Russian-language films keep their Cyrillic original title; everything else is
+named in English.
+
+Preview what it would do, without transferring anything:
+
+```bash
+./scripts/name-preview.sh "Some.Release.2010.1080p.BluRay.x264.mkv"
+docker exec qbittorrent /opt/scripts/name-preview.sh --stdin < names.txt
+```

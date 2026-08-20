@@ -205,7 +205,27 @@ IFS='|' read -r parsed_title parsed_year <<< "$(parse_name "$TORRENT_NAME")"
 log "Parsed: title='$parsed_title' year='${parsed_year:-none}'"
 
 folder_name=""
-if tmdb_result=$(tmdb_lookup "$parsed_title" "$parsed_year"); then
+
+# Preferred path: resolve_name.py cuts the release name at the first metadata
+# token instead of subtracting a fixed tag list, and scores every TMDB candidate
+# rather than trusting results[0]. It exits non-zero when nothing scores well
+# enough, so a doubtful name falls through to the original logic below instead
+# of being renamed to whatever TMDB happened to return first.
+RESOLVER="$(dirname "$0")/resolve_name.py"
+if [ -x "$RESOLVER" ] && command -v python3 >/dev/null 2>&1; then
+    if resolved=$(python3 "$RESOLVER" "$TORRENT_NAME" 2>/dev/null); then
+        resolved_title=$(printf '%s' "$resolved" | cut -f1)
+        resolved_year=$(printf '%s' "$resolved" | cut -f2)
+        if [ -n "$resolved_title" ]; then
+            folder_name="${resolved_title}${resolved_year:+ ($resolved_year)}"
+            log "Resolver: '$resolved_title' (${resolved_year:-no year})"
+        fi
+    else
+        log "Resolver: no confident match, falling back to legacy lookup."
+    fi
+fi
+
+if [ -z "$folder_name" ] && tmdb_result=$(tmdb_lookup "$parsed_title" "$parsed_year"); then
     IFS='|' read -r tmdb_title tmdb_year <<< "$tmdb_result"
     if [ -n "$tmdb_title" ]; then
         folder_name="${tmdb_title}${tmdb_year:+ ($tmdb_year)}"

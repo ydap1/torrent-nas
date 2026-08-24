@@ -16,6 +16,10 @@ Replaces the shell parser's two weakest behaviours:
     `Кривое зеркало (2018)`. Every candidate here is scored on title similarity
     and year agreement, and a weak best result is rejected rather than used.
 
+Film and television are both searched: a series arrives named the way a film
+does, and the film index alone returns nothing for one, which sent it to the
+caller's unscored lookup instead.
+
 Prints "<title>\\t<year>" and exits 0 on a confident match; exits 1 otherwise so
 the caller can fall back to its own logic. Standard library only: this runs
 inside the qBittorrent container, which has no third-party packages.
@@ -56,6 +60,9 @@ YEAR_RE = re.compile(r"(?<!\d)(19\d{2}|20\d{2})(?!\d)")
 BRACKETED = re.compile(r"[\[\(\{][^\]\)\}]*[\]\)\}]")
 EXTENSION = re.compile(r"(?i)\.(mkv|mp4|avi|m4v|ts|m2ts|mov|wmv|mpg|mpeg|iso)$")
 SEASON = re.compile(r"(?i)(?<![a-z0-9])s\d{1,2}(?:e\d{1,3})?(?![a-z0-9])")
+# A season written as a bare trailing number, as in `Skam.01`. Only ever cut as
+# a last resort: Rocky 2 and Ocean's 11 end the same way and mean it.
+TRAILING_NUMBER = re.compile(r"\s+\d{1,2}$")
 # A two-digit year written as an apostrophe suffix, e.g. "Подозрительные лица '95".
 SHORT_YEAR = re.compile(r"['’](\d{2})\s*$")
 ARTICLES = {"the", "a", "an", "of", "and"}
@@ -176,14 +183,53 @@ def request(path: str, params: dict[str, str]) -> dict:
         return json.load(response)
 
 
-def search(query: str, year: int | None, language: str) -> list[dict]:
+# TMDB keeps films and television in separate endpoints that name the same
+# fields differently. Everything below works on one shape so the scoring and
+# ranking never have to know which kind it is holding.
+FIELDS = {
+    "movie": ("title", "original_title", "release_date", "year"),
+    "tv": ("name", "original_name", "first_air_date", "first_air_date_year"),
+}
+
+
+def as_candidate(raw: dict, kind: str) -> dict:
+    title_key, original_key, date_key, _ = FIELDS[kind]
+    return {
+        "id": int(raw.get("id")),
+        "kind": kind,
+        "title": raw.get(title_key) or "",
+        "original_title": raw.get(original_key) or "",
+        "year": int((raw.get(date_key) or "")[:4] or 0) or None,
+        "votes": int(raw.get("vote_count") or 0),
+    }
+
+
+def search(query: str, year: int | None, language: str, kind: str = "movie") -> list[dict]:
+    """Candidates of one kind, already in the common shape."""
     params = {"query": query, "language": language, "include_adult": "true"}
     if year:
-        params["year"] = str(year)
+        params[FIELDS[kind][3]] = str(year)
     try:
-        return request("/search/movie", params).get("results", []) or []
+        results = request(f"/search/{kind}", params).get("results", []) or []
     except Exception:
         return []
+    return [as_candidate(raw, kind) for raw in results]
+
+
+def collect(scored: dict, query: str, year: int | None, query_year: int | None, language: str) -> None:
+    """Score one query against both indexes, keeping each title's best result.
+
+    Television is searched alongside film because a series arrives named exactly
+    the way a film does, and the film index alone returns nothing for one.
+    """
+    for kind in ("movie", "tv"):
+        for candidate in search(query, query_year, language, kind):
+            value = score(query, year, candidate["title"],
+                          candidate["original_title"], candidate["year"])
+            key = (candidate["kind"], candidate["id"])
+            previous = scored.get(key)
+            if previous is None or value > previous[0]:
+                scored[key] = (value, candidate["votes"], candidate)
 
 
 def resolve(raw: str) -> tuple[str, int | None] | None:
@@ -211,19 +257,9 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
     # ru-RU pass scores the same film 1.00 against "Чёрный лебедь". Skipping
     # ids already seen kept the first of those and threw away the second,
     # which is how a file named in Russian resolved to nothing at all.
-    scored: dict[int, tuple[float, int, dict]] = {}
+    scored: dict[tuple[str, int], tuple[float, int, dict]] = {}
     for query, query_year, language in attempts:
-        for candidate in search(query, query_year, language):
-            released = (candidate.get("release_date") or "")[:4]
-            cand_year = int(released) if released.isdigit() else None
-            value = score(title, year,
-                          candidate.get("title") or "",
-                          candidate.get("original_title") or "",
-                          cand_year)
-            film_id = int(candidate.get("id"))
-            previous = scored.get(film_id)
-            if previous is None or value > previous[0]:
-                scored[film_id] = (value, int(candidate.get("vote_count") or 0), candidate)
+        collect(scored, query, year, query_year, language)
         # Stop as soon as an attempt yields a solid match. The ru-RU passes come
         # last and exist only to rescue transliterated names like "Zerkalo"
         # that English search cannot find; letting them run anyway lets an
@@ -231,6 +267,17 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
         # The Conformist became ДАУ. Конформисты.
         if scored and max(s for s, _, _ in scored.values()) >= 0.8:
             break
+
+    # `Skam.01` is a season, and TMDB returns nothing whatsoever for it - not a
+    # weak match, nothing - so the caller fell back to its own unscored lookup
+    # and filed three seasons of it as A Shame For Sweden 2. Dropping the number
+    # is only safe once everything else has failed, since a film that ends in
+    # one means it.
+    if not scored or max(s for s, _, _ in scored.values()) < MIN_SCORE:
+        shorter = TRAILING_NUMBER.sub("", title).strip()
+        if shorter and shorter != title:
+            for language in ("en-US", "ru-RU"):
+                collect(scored, shorter, year, year, language)
 
     if not scored:
         return None
@@ -244,22 +291,23 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
         return None
 
     chosen = best[1]
-    # A ru-RU search returns `title` localised into Russian, so taking it
+    # A ru-RU search returns the title localised into Russian, so taking it
     # verbatim renamed English films to their Russian titles - Shawshank became
     # Побег из Шоушенка. Re-read the winner in en-US to get the canonical name,
-    # then apply the library convention: Russian-language films keep their
-    # Cyrillic original title, everything else uses the English one.
+    # then apply the library convention: Russian-language titles keep their
+    # Cyrillic original, everything else uses the English one.
+    title_key, original_key, date_key, _ = FIELDS[chosen["kind"]]
     try:
-        detail = request(f"/movie/{chosen['id']}", {"language": "en-US"})
+        detail = request(f"/{chosen['kind']}/{chosen['id']}", {"language": "en-US"})
     except Exception:
-        detail = chosen
+        detail = {}
 
-    released = (detail.get("release_date") or chosen.get("release_date") or "")[:4]
-    final_year = int(released) if released.isdigit() else year
+    released = (detail.get(date_key) or "")[:4]
+    final_year = int(released) if released.isdigit() else (chosen["year"] or year)
 
-    if detail.get("original_language") == "ru" and detail.get("original_title"):
-        return detail["original_title"], final_year
-    return (detail.get("title") or detail.get("original_title") or title), final_year
+    if detail.get("original_language") == "ru" and detail.get(original_key):
+        return detail[original_key], final_year
+    return (detail.get(title_key) or chosen["title"] or title), final_year
 
 
 def main() -> int:

@@ -192,8 +192,8 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
         return None
 
     # Try the year both ways: a release name that needed heavy cleaning often
-    # has an unreliable year too. Russian queries are retried in ru-RU, which is
-    # what finds Cyrillic titles TMDB will not return for an en-US search.
+    # has an unreliable year too. Every title is retried in ru-RU, which is what
+    # renders a film's Russian title where it can be compared to the query.
     attempts: list[tuple[str, int | None, str]] = [(title, year, "en-US")]
     if year:
         attempts.append((title, None, "en-US"))
@@ -203,29 +203,33 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
     attempts.append((title, year, "ru-RU"))
     attempts.append((title, None, "ru-RU"))
 
-    scored: list[tuple[float, int, dict]] = []
-    seen: set[int] = set()
+    # Keyed by film id, holding that film's *best* score across the attempts.
+    # A film seen in one language is still worth scoring in the other: TMDB
+    # answers a Cyrillic query from its alternative titles but returns them
+    # rendered in the language asked for, so the en-US pass finds Black Swan
+    # for "Черный лебедь" and scores it 0.17 against "Black Swan", while the
+    # ru-RU pass scores the same film 1.00 against "Чёрный лебедь". Skipping
+    # ids already seen kept the first of those and threw away the second,
+    # which is how a file named in Russian resolved to nothing at all.
+    scored: dict[int, tuple[float, int, dict]] = {}
     for query, query_year, language in attempts:
         for candidate in search(query, query_year, language):
-            if candidate.get("id") in seen:
-                continue
-            seen.add(candidate.get("id"))
             released = (candidate.get("release_date") or "")[:4]
             cand_year = int(released) if released.isdigit() else None
-            scored.append((
-                score(title, year,
-                      candidate.get("title") or "",
-                      candidate.get("original_title") or "",
-                      cand_year),
-                int(candidate.get("vote_count") or 0),
-                candidate,
-            ))
+            value = score(title, year,
+                          candidate.get("title") or "",
+                          candidate.get("original_title") or "",
+                          cand_year)
+            film_id = int(candidate.get("id"))
+            previous = scored.get(film_id)
+            if previous is None or value > previous[0]:
+                scored[film_id] = (value, int(candidate.get("vote_count") or 0), candidate)
         # Stop as soon as an attempt yields a solid match. The ru-RU passes come
         # last and exist only to rescue transliterated names like "Zerkalo"
         # that English search cannot find; letting them run anyway lets an
         # unrelated Russian film outrank a good English one, which is how
         # The Conformist became ДАУ. Конформисты.
-        if scored and max(s for s, _, _ in scored) >= 0.8:
+        if scored and max(s for s, _, _ in scored.values()) >= 0.8:
             break
 
     if not scored:
@@ -233,7 +237,7 @@ def resolve(raw: str) -> tuple[str, int | None] | None:
     # Rank on score, then on how well known the film is. Rounding first means a
     # trivial similarity difference does not outrank a far more likely title,
     # while a genuinely better match still wins outright.
-    best_score, _, chosen = max(scored, key=lambda row: (round(row[0], 2), row[1]))
+    best_score, _, chosen = max(scored.values(), key=lambda row: (round(row[0], 2), row[1]))
     best = (best_score, chosen)
 
     if best is None or best[0] < MIN_SCORE:
